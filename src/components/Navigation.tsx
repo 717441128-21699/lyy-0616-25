@@ -6,19 +6,21 @@ import { useStore } from '../store/useStore';
 export const Navigation: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { todayQueue, completedToday, userProgress, getCurrentDeck } = useStore();
-  
+  const { todayPlan, completedToday, userProgress, getCurrentDeck } = useStore();
+
   const currentDeck = getCurrentDeck();
-  
+  const totalTasks = todayPlan.newWords.length + todayPlan.reviewWords.length;
+  const remainingCount = Math.max(0, totalTasks - completedToday.length);
+
   const navItems = [
-    { path: '/', icon: BookOpen, label: '学习', badge: todayQueue.length > 0 ? todayQueue.length : null },
+    { path: '/', icon: BookOpen, label: '学习', badge: remainingCount > 0 ? remainingCount : null },
     { path: '/decks', icon: Book, label: '词库', badge: null },
     { path: '/stats', icon: BarChart2, label: '统计', badge: null },
     { path: '/settings', icon: Settings, label: '设置', badge: null },
   ];
-  
+
   const isActive = (path: string) => location.pathname === path;
-  
+
   return (
     <>
       <div className="fixed top-0 left-0 right-0 bg-white/10 backdrop-blur-lg border-b border-white/20 z-40">
@@ -35,7 +37,7 @@ export const Navigation: React.FC = () => {
                 )}
               </div>
             </div>
-            
+
             <div className="hidden md:flex items-center gap-6">
               {userProgress.streakDays > 0 && (
                 <div className="flex items-center gap-2 bg-orange-500/20 px-4 py-2 rounded-full">
@@ -43,23 +45,23 @@ export const Navigation: React.FC = () => {
                   <span className="text-white font-semibold">{userProgress.streakDays} 天连续</span>
                 </div>
               )}
-              
+
               <div className="bg-white/10 px-4 py-2 rounded-full">
                 <span className="text-white">
-                  今日: {completedToday.length} / {todayQueue.length + completedToday.length}
+                  今日: {completedToday.length} / {totalTasks}
                 </span>
               </div>
             </div>
           </div>
         </div>
       </div>
-      
+
       <div className="fixed bottom-0 left-0 right-0 bg-white/10 backdrop-blur-lg border-t border-white/20 z-40 md:hidden">
         <div className="flex justify-around py-2">
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.path);
-            
+
             return (
               <button
                 key={item.path}
@@ -80,18 +82,18 @@ export const Navigation: React.FC = () => {
           })}
         </div>
       </div>
-      
+
       <div className="hidden md:block fixed left-0 top-16 bottom-0 w-20 bg-white/5 backdrop-blur-lg border-r border-white/10 z-30">
         <div className="flex flex-col items-center py-6 gap-4">
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.path);
-            
+
             return (
               <button
                 key={item.path}
                 onClick={() => navigate(item.path)}
-                className={`relative w-12 h-12 rounded-xl flex items-center justify-center transition-all ${
+                className={`relative w-12 h-12 rounded-xl flex items-center justify-center transition-all group ${
                   active
                     ? 'bg-gradient-to-br from-primary-500 to-purple-600 text-white shadow-lg'
                     : 'text-white/60 hover:text-white hover:bg-white/10'
@@ -103,7 +105,7 @@ export const Navigation: React.FC = () => {
                     {item.badge}
                   </span>
                 )}
-                <span className="absolute left-14 bg-gray-900 text-white text-sm px-2 py-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap">
+                <span className="absolute left-14 bg-gray-900 text-white text-sm px-2 py-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap transition-opacity">
                   {item.label}
                 </span>
               </button>
@@ -111,7 +113,7 @@ export const Navigation: React.FC = () => {
           })}
         </div>
       </div>
-      
+
       <div className="pt-16 pb-20 md:pt-16 md:pb-0 md:pl-20" />
     </>
   );

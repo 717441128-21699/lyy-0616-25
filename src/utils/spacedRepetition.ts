@@ -1,4 +1,4 @@
-import type { WordProgress, QualityRating, ReviewResult } from '../types';
+import type { WordProgress, QualityRating, ReviewResult, TodayPlan, StudyMode } from '../types';
 
 export const formatDate = (date: Date): string => {
   return date.toISOString().split('T')[0];
@@ -60,13 +60,15 @@ export const initializeWordProgress = (wordId: string, isStarred: boolean = fals
     mnemonic: '',
     proficiency: 'new',
     reviewHistory: [],
+    recentWrong: false,
   };
 };
 
 export const calculateNextReview = (
   progress: WordProgress,
   quality: QualityRating,
-  responseTime: number = 5
+  responseTime: number = 5,
+  mode: StudyMode = 'normal'
 ): WordProgress => {
   const today = formatDate(new Date());
   let { easeFactor, interval, repetitions } = progress;
@@ -100,6 +102,7 @@ export const calculateNextReview = (
   
   const nextDate = addDays(new Date(today), interval);
   const proficiency = getProficiency(repetitions, easeFactor);
+  const recentWrong = quality === 0 ? true : quality === 5 ? false : progress.recentWrong;
   
   return {
     ...progress,
@@ -109,9 +112,10 @@ export const calculateNextReview = (
     nextReviewDate: formatDate(nextDate),
     lastReviewDate: today,
     proficiency,
+    recentWrong,
     reviewHistory: [
       ...progress.reviewHistory,
-      { date: today, quality, responseTime },
+      { date: today, quality, responseTime, mode },
     ].slice(-50),
   };
 };
@@ -121,16 +125,33 @@ export const isDueForReview = (progress: WordProgress): boolean => {
   return progress.nextReviewDate <= today;
 };
 
-export const getWordsForToday = (
+export const getNewWords = (
   allProgress: Record<string, WordProgress>,
   words: { id: string }[],
-  dailyNew: number,
-  dailyReview: number
+  limit: number,
+  excludeIds: string[] = []
+): string[] => {
+  return words
+    .filter(w => {
+      if (excludeIds.includes(w.id)) return false;
+      const progress = allProgress[w.id];
+      return !progress || progress.repetitions === 0;
+    })
+    .slice(0, limit)
+    .map(w => w.id);
+};
+
+export const getReviewWords = (
+  allProgress: Record<string, WordProgress>,
+  words: { id: string }[],
+  limit: number,
+  excludeIds: string[] = []
 ): string[] => {
   const today = formatDate(new Date());
   
-  const reviewWords = words
+  return words
     .filter(w => {
+      if (excludeIds.includes(w.id)) return false;
       const progress = allProgress[w.id];
       if (!progress) return false;
       return progress.repetitions > 0 && progress.nextReviewDate <= today;
@@ -142,18 +163,69 @@ export const getWordsForToday = (
       if (!pa.isStarred && pb.isStarred) return 1;
       return calculateRetrievability(pa) - calculateRetrievability(pb);
     })
-    .slice(0, dailyReview)
+    .slice(0, limit)
     .map(w => w.id);
-  
-  const newWords = words
+};
+
+export const getIntensiveWords = (
+  allProgress: Record<string, WordProgress>,
+  words: { id: string }[],
+  limit: number,
+  excludeIds: string[] = []
+): string[] => {
+  return words
     .filter(w => {
+      if (excludeIds.includes(w.id)) return false;
       const progress = allProgress[w.id];
-      return !progress || progress.repetitions === 0;
+      if (!progress) return false;
+      return progress.isStarred || progress.recentWrong;
     })
-    .slice(0, dailyNew)
+    .sort((a, b) => {
+      const pa = allProgress[a.id];
+      const pb = allProgress[b.id];
+      const paScore = (pa.isStarred ? 2 : 0) + (pa.recentWrong ? 1 : 0);
+      const pbScore = (pb.isStarred ? 2 : 0) + (pb.recentWrong ? 1 : 0);
+      if (paScore !== pbScore) return pbScore - paScore;
+      return calculateRetrievability(pa) - calculateRetrievability(pb);
+    })
+    .slice(0, limit)
     .map(w => w.id);
+};
+
+export const generateTodayPlan = (
+  allProgress: Record<string, WordProgress>,
+  words: { id: string }[],
+  newLimit: number,
+  reviewLimit: number,
+  intensiveLimit: number,
+  completedIds: string[] = []
+): TodayPlan => {
+  const reviewWords = getReviewWords(allProgress, words, reviewLimit, completedIds);
+  const newWords = getNewWords(allProgress, words, newLimit, [...completedIds, ...reviewWords]);
+  const intensiveWords = getIntensiveWords(allProgress, words, intensiveLimit, completedIds);
   
-  return [...reviewWords, ...newWords];
+  return {
+    newWords,
+    reviewWords,
+    intensiveWords,
+    newWordsLimit: newLimit,
+    reviewWordsLimit: reviewLimit,
+    intensiveWordsLimit: intensiveLimit,
+  };
+};
+
+export const getTodayQueue = (plan: TodayPlan): string[] => {
+  const seen = new Set<string>();
+  const queue: string[] = [];
+  
+  for (const id of [...plan.reviewWords, ...plan.newWords]) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      queue.push(id);
+    }
+  }
+  
+  return queue;
 };
 
 export const predictMemoryCurve = (progress: WordProgress, days: number = 30): number[] => {

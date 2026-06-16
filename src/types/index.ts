@@ -20,17 +20,21 @@ export interface WordProgress {
   mnemonic: string;
   proficiency: 'new' | 'learning' | 'familiar' | 'mastered';
   reviewHistory: ReviewRecord[];
+  recentWrong: boolean;
 }
 
 export interface ReviewRecord {
   date: string;
   quality: number;
   responseTime: number;
+  mode: 'normal' | 'intensive';
 }
 
 export type QualityRating = 0 | 3 | 5;
 
 export type ReviewResult = 'forgot' | 'fuzzy' | 'remembered';
+
+export type StudyMode = 'normal' | 'intensive';
 
 export interface Deck {
   id: string;
@@ -41,9 +45,19 @@ export interface Deck {
   words: Word[];
 }
 
+export interface TodayPlan {
+  newWords: string[];
+  reviewWords: string[];
+  intensiveWords: string[];
+  newWordsLimit: number;
+  reviewWordsLimit: number;
+  intensiveWordsLimit: number;
+}
+
 export interface UserSettings {
   dailyNewWords: number;
   dailyReviewWords: number;
+  dailyIntensiveWords: number;
   autoPlayAudio: boolean;
   darkMode: boolean;
   syncEnabled: boolean;
@@ -55,6 +69,7 @@ export interface DailyStats {
   date: string;
   newWordsLearned: number;
   wordsReviewed: number;
+  intensiveReviewed: number;
   correctRate: number;
   totalTimeSpent: number;
 }
@@ -64,6 +79,7 @@ export interface UserProgress {
   lastStudyDate: string | null;
   totalWordsLearned: number;
   totalReviews: number;
+  totalIntensiveReviews: number;
   masteryRate: number;
   dailyStats: DailyStats[];
 }
@@ -74,6 +90,16 @@ export interface AppState {
   wordProgress: Record<string, WordProgress>;
   userSettings: UserSettings;
   userProgress: UserProgress;
-  todayQueue: string[];
+  todayPlan: TodayPlan;
   completedToday: string[];
+  completedIntensiveToday: string[];
+  currentMode: StudyMode;
+}
+
+export interface ImportPreviewItem {
+  lineNumber: number;
+  isValid: boolean;
+  errors: string[];
+  word?: Word;
+  raw: string;
 }

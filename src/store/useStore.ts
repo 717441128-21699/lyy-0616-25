@@ -1,18 +1,39 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Deck, WordProgress, AppState, UserSettings, UserProgress, ReviewResult, Word } from '../types';
+import type {
+  Deck,
+  WordProgress,
+  AppState,
+  UserSettings,
+  UserProgress,
+  ReviewResult,
+  Word,
+  StudyMode,
+  TodayPlan,
+} from '../types';
 import { builtinDecks, createCustomDeck } from '../data/decks';
-import { initializeWordProgress, calculateNextReview, mapResultToQuality, getWordsForToday, formatDate, daysBetween } from '../utils/spacedRepetition';
+import {
+  initializeWordProgress,
+  calculateNextReview,
+  mapResultToQuality,
+  generateTodayPlan,
+  getTodayQueue,
+  formatDate,
+  daysBetween,
+  getIntensiveWords,
+} from '../utils/spacedRepetition';
 
 interface StoreState extends AppState {
   setCurrentDeck: (deckId: string) => void;
   addCustomDeck: (name: string, words: Word[]) => void;
   removeDeck: (deckId: string) => void;
-  reviewWord: (wordId: string, result: ReviewResult, responseTime: number) => void;
+  reviewWord: (wordId: string, result: ReviewResult, responseTime: number, mode?: StudyMode) => void;
   updateWordNotes: (wordId: string, notes: string) => void;
   updateWordMnemonic: (wordId: string, mnemonic: string) => void;
   toggleWordStarred: (wordId: string) => void;
-  generateTodayQueue: () => void;
+  regenerateTodayPlan: () => void;
+  adjustTodayPlanLimit: (type: 'new' | 'review' | 'intensive', delta: number) => void;
+  setCurrentMode: (mode: StudyMode) => void;
   updateSettings: (settings: Partial<UserSettings>) => void;
   syncData: (data?: Partial<AppState>) => Partial<AppState> | null;
   getExportData: () => string;
@@ -20,10 +41,21 @@ interface StoreState extends AppState {
   getCurrentDeck: () => Deck | null;
   getWordById: (wordId: string) => Word | null;
   getWordProgress: (wordId: string) => WordProgress;
+  getCurrentQueue: () => string[];
+  getIntensiveQueue: () => string[];
 }
 
 const generateDeviceId = (): string => {
   return 'device-' + Math.random().toString(36).substr(2, 9);
+};
+
+const emptyPlan: TodayPlan = {
+  newWords: [],
+  reviewWords: [],
+  intensiveWords: [],
+  newWordsLimit: 10,
+  reviewWordsLimit: 20,
+  intensiveWordsLimit: 15,
 };
 
 const getInitialState = (): AppState => {
@@ -34,6 +66,7 @@ const getInitialState = (): AppState => {
     userSettings: {
       dailyNewWords: 10,
       dailyReviewWords: 20,
+      dailyIntensiveWords: 15,
       autoPlayAudio: true,
       darkMode: false,
       syncEnabled: false,
@@ -45,24 +78,27 @@ const getInitialState = (): AppState => {
       lastStudyDate: null,
       totalWordsLearned: 0,
       totalReviews: 0,
+      totalIntensiveReviews: 0,
       masteryRate: 0,
       dailyStats: [],
     },
-    todayQueue: [],
+    todayPlan: emptyPlan,
     completedToday: [],
+    completedIntensiveToday: [],
+    currentMode: 'normal',
   };
 };
 
 const updateStreak = (progress: UserProgress): UserProgress => {
   const today = formatDate(new Date());
   const lastDate = progress.lastStudyDate;
-  
+
   if (lastDate === today) {
     return progress;
   }
-  
+
   let streakDays = progress.streakDays;
-  
+
   if (lastDate) {
     const daysDiff = daysBetween(lastDate, today);
     if (daysDiff === 1) {
@@ -73,7 +109,7 @@ const updateStreak = (progress: UserProgress): UserProgress => {
   } else {
     streakDays = 1;
   }
-  
+
   return {
     ...progress,
     streakDays,
@@ -85,23 +121,26 @@ const updateDailyStats = (
   progress: UserProgress,
   isNew: boolean,
   correct: boolean,
-  timeSpent: number
+  timeSpent: number,
+  mode: StudyMode
 ): UserProgress => {
   const today = formatDate(new Date());
-  const existingStats = progress.dailyStats.find(s => s.date === today);
-  
+  const existingStats = progress.dailyStats.find((s) => s.date === today);
+
   let dailyStats;
-  
+
   if (existingStats) {
-    dailyStats = progress.dailyStats.map(s => {
+    dailyStats = progress.dailyStats.map((s) => {
       if (s.date === today) {
+        const totalReviews = s.wordsReviewed + 1;
         return {
           ...s,
           newWordsLearned: isNew ? s.newWordsLearned + 1 : s.newWordsLearned,
-          wordsReviewed: s.wordsReviewed + 1,
-          correctRate: correct 
-            ? (s.correctRate * s.wordsReviewed + 1) / (s.wordsReviewed + 1)
-            : (s.correctRate * s.wordsReviewed) / (s.wordsReviewed + 1),
+          wordsReviewed: mode === 'normal' ? s.wordsReviewed + 1 : s.wordsReviewed,
+          intensiveReviewed: mode === 'intensive' ? s.intensiveReviewed + 1 : s.intensiveReviewed,
+          correctRate: correct
+            ? (s.correctRate * s.wordsReviewed + 1) / totalReviews
+            : (s.correctRate * s.wordsReviewed) / totalReviews,
           totalTimeSpent: s.totalTimeSpent + timeSpent,
         };
       }
@@ -113,13 +152,14 @@ const updateDailyStats = (
       {
         date: today,
         newWordsLearned: isNew ? 1 : 0,
-        wordsReviewed: 1,
+        wordsReviewed: mode === 'normal' ? 1 : 0,
+        intensiveReviewed: mode === 'intensive' ? 1 : 0,
         correctRate: correct ? 1 : 0,
         totalTimeSpent: timeSpent,
       },
     ];
   }
-  
+
   return { ...progress, dailyStats };
 };
 
@@ -127,78 +167,88 @@ export const useStore = create<StoreState>()(
   persist(
     (set, get) => ({
       ...getInitialState(),
-      
+
       setCurrentDeck: (deckId: string) => {
         set({ currentDeckId: deckId });
-        get().generateTodayQueue();
+        get().regenerateTodayPlan();
       },
-      
+
       addCustomDeck: (name: string, words: Word[]) => {
         const deck = createCustomDeck(name, words);
-        set(state => ({
+        set((state) => ({
           decks: [...state.decks, deck],
         }));
       },
-      
+
       removeDeck: (deckId: string) => {
-        set(state => {
-          const decks = state.decks.filter(d => d.id !== deckId);
-          const currentDeckId = state.currentDeckId === deckId 
-            ? decks[0]?.id || null 
+        set((state) => {
+          const decks = state.decks.filter((d) => d.id !== deckId);
+          const currentDeckId = state.currentDeckId === deckId
+            ? decks[0]?.id || null
             : state.currentDeckId;
           return { decks, currentDeckId };
         });
       },
-      
-      reviewWord: (wordId: string, result: ReviewResult, responseTime: number) => {
+
+      reviewWord: (wordId: string, result: ReviewResult, responseTime: number, mode: StudyMode = 'normal') => {
         const quality = mapResultToQuality(result);
         const correct = result !== 'forgot';
-        
-        set(state => {
+
+        set((state) => {
           const existingProgress = state.wordProgress[wordId] || initializeWordProgress(wordId);
           const isNew = existingProgress.repetitions === 0;
-          const newProgress = calculateNextReview(existingProgress, quality, responseTime);
-          
+          const newProgress = calculateNextReview(existingProgress, quality, responseTime, mode);
+
           const userProgress = updateDailyStats(
             updateStreak(state.userProgress),
             isNew,
             correct,
-            responseTime
+            responseTime,
+            mode
           );
-          
-          const totalWordsLearned = Object.values(state.wordProgress).filter(
-            p => p.repetitions > 0
-          ).length + (isNew ? 1 : 0);
-          
-          const masteredCount = Object.values({
+
+          const allProgress = {
             ...state.wordProgress,
             [wordId]: newProgress,
-          }).filter(p => p.proficiency === 'mastered').length;
-          
+          };
+
+          const totalWordsLearned = Object.values(allProgress).filter(
+            (p) => p.repetitions > 0
+          ).length;
+
+          const masteredCount = Object.values(allProgress).filter(
+            (p) => p.proficiency === 'mastered'
+          ).length;
+
           const masteryRate = totalWordsLearned > 0 ? masteredCount / totalWordsLearned : 0;
-          
-          const todayQueue = state.todayQueue.filter(id => id !== wordId);
-          const completedToday = [...state.completedToday, wordId];
-          
+
+          const completedToday = state.completedToday.includes(wordId)
+            ? state.completedToday
+            : [...state.completedToday, wordId];
+
+          const completedIntensiveToday = mode === 'intensive'
+            ? (state.completedIntensiveToday.includes(wordId)
+              ? state.completedIntensiveToday
+              : [...state.completedIntensiveToday, wordId])
+            : state.completedIntensiveToday;
+
           return {
-            wordProgress: {
-              ...state.wordProgress,
-              [wordId]: newProgress,
-            },
+            wordProgress: allProgress,
             userProgress: {
               ...userProgress,
               totalWordsLearned,
-              totalReviews: state.userProgress.totalReviews + 1,
+              totalReviews: state.userProgress.totalReviews + (mode === 'normal' ? 1 : 0),
+              totalIntensiveReviews: state.userProgress.totalIntensiveReviews + (mode === 'intensive' ? 1 : 0),
               masteryRate,
             },
-            todayQueue,
             completedToday,
+            completedIntensiveToday,
           };
         });
       },
-      
+
       updateWordNotes: (wordId: string, notes: string) => {
-        set(state => {
+        set((state) => {
           const progress = state.wordProgress[wordId] || initializeWordProgress(wordId);
           return {
             wordProgress: {
@@ -208,9 +258,9 @@ export const useStore = create<StoreState>()(
           };
         });
       },
-      
+
       updateWordMnemonic: (wordId: string, mnemonic: string) => {
-        set(state => {
+        set((state) => {
           const progress = state.wordProgress[wordId] || initializeWordProgress(wordId);
           return {
             wordProgress: {
@@ -220,9 +270,9 @@ export const useStore = create<StoreState>()(
           };
         });
       },
-      
+
       toggleWordStarred: (wordId: string) => {
-        set(state => {
+        set((state) => {
           const progress = state.wordProgress[wordId] || initializeWordProgress(wordId);
           return {
             wordProgress: {
@@ -232,35 +282,69 @@ export const useStore = create<StoreState>()(
           };
         });
       },
-      
-      generateTodayQueue: () => {
+
+      regenerateTodayPlan: () => {
         const state = get();
         const deck = state.getCurrentDeck();
         if (!deck) return;
-        
-        const queue = getWordsForToday(
+
+        const plan = generateTodayPlan(
           state.wordProgress,
           deck.words,
-          state.userSettings.dailyNewWords,
-          state.userSettings.dailyReviewWords
-        ).filter(id => !state.completedToday.includes(id));
-        
-        set({ todayQueue: queue });
+          state.todayPlan.newWordsLimit || state.userSettings.dailyNewWords,
+          state.todayPlan.reviewWordsLimit || state.userSettings.dailyReviewWords,
+          state.todayPlan.intensiveWordsLimit || state.userSettings.dailyIntensiveWords,
+          state.completedToday
+        );
+
+        set({ todayPlan: plan });
       },
-      
+
+      adjustTodayPlanLimit: (type: 'new' | 'review' | 'intensive', delta: number) => {
+        const state = get();
+        const deck = state.getCurrentDeck();
+        if (!deck) return;
+
+        const newLimit = Math.max(0, Math.min(200, (() => {
+          switch (type) {
+            case 'new':
+              return (state.todayPlan.newWordsLimit || state.userSettings.dailyNewWords) + delta;
+            case 'review':
+              return (state.todayPlan.reviewWordsLimit || state.userSettings.dailyReviewWords) + delta;
+            case 'intensive':
+              return (state.todayPlan.intensiveWordsLimit || state.userSettings.dailyIntensiveWords) + delta;
+          }
+        })()));
+
+        const plan = generateTodayPlan(
+          state.wordProgress,
+          deck.words,
+          type === 'new' ? newLimit : state.todayPlan.newWordsLimit,
+          type === 'review' ? newLimit : state.todayPlan.reviewWordsLimit,
+          type === 'intensive' ? newLimit : state.todayPlan.intensiveWordsLimit,
+          state.completedToday
+        );
+
+        set({ todayPlan: plan });
+      },
+
+      setCurrentMode: (mode: StudyMode) => {
+        set({ currentMode: mode });
+      },
+
       updateSettings: (settings: Partial<UserSettings>) => {
-        set(state => ({
+        set((state) => ({
           userSettings: { ...state.userSettings, ...settings },
         }));
       },
-      
+
       syncData: (data?: Partial<AppState>): Partial<AppState> | null => {
         const state = get();
-        
+
         if (data) {
           const lastSyncTime = state.userSettings.lastSyncTime;
           const dataLastSync = data.userSettings?.lastSyncTime;
-          
+
           if (!dataLastSync || (lastSyncTime && dataLastSync < lastSyncTime)) {
             return {
               decks: state.decks,
@@ -269,8 +353,8 @@ export const useStore = create<StoreState>()(
               userSettings: state.userSettings,
             };
           }
-          
-          set(state => ({
+
+          set((state) => ({
             decks: data.decks || state.decks,
             wordProgress: data.wordProgress || state.wordProgress,
             userProgress: data.userProgress || state.userProgress,
@@ -280,10 +364,12 @@ export const useStore = create<StoreState>()(
               lastSyncTime: formatDate(new Date()),
             },
           }));
-          
+
+          setTimeout(() => get().regenerateTodayPlan(), 0);
+
           return null;
         }
-        
+
         return {
           decks: state.decks,
           wordProgress: state.wordProgress,
@@ -294,65 +380,90 @@ export const useStore = create<StoreState>()(
           },
         };
       },
-      
+
       getExportData: (): string => {
         const state = get();
         const exportData = {
-          decks: state.decks.filter(d => d.category === 'custom'),
+          decks: state.decks.filter((d) => d.category === 'custom'),
           wordProgress: state.wordProgress,
           userProgress: state.userProgress,
           userSettings: state.userSettings,
+          completedToday: state.completedToday,
           exportTime: new Date().toISOString(),
-          version: '1.0',
+          version: '2.0',
         };
         return JSON.stringify(exportData, null, 2);
       },
-      
+
       importData: (dataString: string): boolean => {
         try {
           const data = JSON.parse(dataString);
           const state = get();
-          
+
           const customDecks = (data.decks || []).filter((d: Deck) => d.category === 'custom');
-          const existingDeckIds = new Set(state.decks.map(d => d.id));
+          const existingDeckIds = new Set(state.decks.map((d) => d.id));
           const newDecks = customDecks.filter((d: Deck) => !existingDeckIds.has(d.id));
-          
-          set(state => ({
+
+          set((state) => ({
             decks: [...state.decks, ...newDecks],
             wordProgress: { ...state.wordProgress, ...data.wordProgress },
             userProgress: data.userProgress || state.userProgress,
             userSettings: { ...state.userSettings, ...data.userSettings },
+            completedToday: data.completedToday || state.completedToday,
           }));
-          
-          get().generateTodayQueue();
+
+          setTimeout(() => get().regenerateTodayPlan(), 0);
           return true;
         } catch (e) {
           console.error('Import failed:', e);
           return false;
         }
       },
-      
+
       getCurrentDeck: (): Deck | null => {
         const state = get();
-        return state.decks.find(d => d.id === state.currentDeckId) || null;
+        return state.decks.find((d) => d.id === state.currentDeckId) || null;
       },
-      
+
       getWordById: (wordId: string): Word | null => {
         const state = get();
         for (const deck of state.decks) {
-          const word = deck.words.find(w => w.id === wordId);
+          const word = deck.words.find((w) => w.id === wordId);
           if (word) return word;
         }
         return null;
       },
-      
+
       getWordProgress: (wordId: string): WordProgress => {
         const state = get();
         return state.wordProgress[wordId] || initializeWordProgress(wordId);
       },
+
+      getCurrentQueue: (): string[] => {
+        const state = get();
+        const queue = getTodayQueue(state.todayPlan);
+        return queue.filter((id) => !state.completedToday.includes(id));
+      },
+
+      getIntensiveQueue: (): string[] => {
+        const state = get();
+        const deck = state.getCurrentDeck();
+        if (!deck) return [];
+
+        const intensive = state.todayPlan.intensiveWords.length > 0
+          ? state.todayPlan.intensiveWords
+          : getIntensiveWords(
+              state.wordProgress,
+              deck.words,
+              state.userSettings.dailyIntensiveWords,
+              state.completedIntensiveToday
+            );
+
+        return intensive.filter((id) => !state.completedIntensiveToday.includes(id));
+      },
     }),
     {
-      name: 'vocab-memory-storage',
+      name: 'vocab-memory-storage-v2',
       partialize: (state) => ({
         decks: state.decks,
         currentDeckId: state.currentDeckId,
@@ -360,18 +471,28 @@ export const useStore = create<StoreState>()(
         userSettings: state.userSettings,
         userProgress: state.userProgress,
         completedToday: state.completedToday,
+        completedIntensiveToday: state.completedIntensiveToday,
+        todayPlan: state.todayPlan,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
           const today = formatDate(new Date());
           const lastStudyDate = state.userProgress.lastStudyDate;
-          
+
           if (lastStudyDate !== today) {
             state.completedToday = [];
+            state.completedIntensiveToday = [];
+            state.currentMode = 'normal';
+            state.todayPlan = {
+              ...emptyPlan,
+              newWordsLimit: state.userSettings.dailyNewWords,
+              reviewWordsLimit: state.userSettings.dailyReviewWords,
+              intensiveWordsLimit: state.userSettings.dailyIntensiveWords,
+            };
           }
-          
+
           setTimeout(() => {
-            state.generateTodayQueue();
+            state.regenerateTodayPlan();
           }, 0);
         }
       },
