@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Bar, Doughnut, Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -13,7 +13,10 @@ import {
   Legend,
   Filler,
 } from 'chart.js';
-import { BarChart2, Flame, BookOpen, Brain, TrendingUp, Calendar, Zap, Star } from 'lucide-react';
+import {
+  BarChart2, Flame, BookOpen, Brain, TrendingUp, Calendar, Zap, Star,
+  ChevronDown, ChevronUp, Clock, Plus,
+} from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { predictMemoryCurve, formatDate, addDays } from '../utils/spacedRepetition';
 
@@ -31,8 +34,16 @@ ChartJS.register(
 );
 
 export const StatsPage: React.FC = () => {
-  const { userProgress, wordProgress, decks, getCurrentDeck } = useStore();
+  const {
+    userProgress,
+    wordProgress,
+    decks,
+    getCurrentDeck,
+    toggleWordStarred,
+    addWordToIntensive,
+  } = useStore();
   const currentDeck = getCurrentDeck();
+  const [expandedWordId, setExpandedWordId] = useState<string | null>(null);
 
   const starAndRecentWrongStats = useMemo(() => {
     const allProgress = Object.values(wordProgress);
@@ -343,23 +354,26 @@ export const StatsPage: React.FC = () => {
         {currentDeck && (
           <div className="bg-white rounded-2xl p-6 shadow-xl">
             <h3 className="text-lg font-bold text-gray-800 mb-4">
-              当前词库：{currentDeck.name} - 学习详情
+              当前词库：{currentDeck.name} - 单词详情
             </h3>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    <th className="text-left py-3 px-4 text-gray-600 font-semibold">单词</th>
-                    <th className="text-left py-3 px-4 text-gray-600 font-semibold">标记</th>
-                    <th className="text-left py-3 px-4 text-gray-600 font-semibold">熟练度</th>
-                    <th className="text-left py-3 px-4 text-gray-600 font-semibold">复习次数</th>
-                    <th className="text-left py-3 px-4 text-gray-600 font-semibold">下次复习</th>
-                    <th className="text-left py-3 px-4 text-gray-600 font-semibold">难度系数</th>
+                    <th className="w-8 py-3 px-3"></th>
+                    <th className="text-left py-3 px-3 text-gray-600 font-semibold">单词</th>
+                    <th className="text-left py-3 px-3 text-gray-600 font-semibold">标记</th>
+                    <th className="text-left py-3 px-3 text-gray-600 font-semibold">熟练度</th>
+                    <th className="text-left py-3 px-3 text-gray-600 font-semibold">复习次数</th>
+                    <th className="text-left py-3 px-3 text-gray-600 font-semibold">下次复习</th>
+                    <th className="text-left py-3 px-3 text-gray-600 font-semibold">难度</th>
+                    <th className="text-right py-3 px-3 text-gray-600 font-semibold">操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {currentDeck.words.slice(0, 10).map(word => {
+                  {currentDeck.words.slice(0, 20).map(word => {
                     const progress = wordProgress[word.id];
+                    const isExpanded = expandedWordId === word.id;
                     const proficiencyColors = {
                       new: 'bg-gray-100 text-gray-600',
                       learning: 'bg-blue-100 text-blue-600',
@@ -372,44 +386,144 @@ export const StatsPage: React.FC = () => {
                       familiar: '熟悉',
                       mastered: '已掌握',
                     };
+                    const prof = progress?.proficiency || 'new';
 
                     return (
-                      <tr key={word.id} className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="py-3 px-4">
-                          <span className="font-medium text-gray-800">{word.word}</span>
-                          <span className="text-gray-500 text-sm ml-2">{word.phonetic}</span>
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex gap-1">
-                            {progress?.isStarred && (
-                              <span className="inline-block px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 text-xs">
-                                ⭐ 星标
-                              </span>
-                            )}
-                            {progress?.recentWrong && (
-                              <span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs">
-                                近期错词
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="py-3 px-4">
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${proficiencyColors[progress?.proficiency || 'new']}`}>
-                            {proficiencyLabels[progress?.proficiency || 'new']}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-gray-600">{progress?.repetitions || 0}</td>
-                        <td className="py-3 px-4 text-gray-600">{progress?.nextReviewDate || '-'}</td>
-                        <td className="py-3 px-4 text-gray-600">{progress?.easeFactor.toFixed(2) || '2.50'}</td>
-                      </tr>
+                      <React.Fragment key={word.id}>
+                        <tr className={`border-b border-gray-100 hover:bg-gray-50 cursor-pointer ${isExpanded ? 'bg-gray-50' : ''}`}
+                            onClick={() => setExpandedWordId(isExpanded ? null : word.id)}>
+                          <td className="py-3 px-3 text-gray-400">
+                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="font-medium text-gray-800">{word.word}</span>
+                            <span className="text-gray-500 text-sm ml-2">{word.phonetic}</span>
+                          </td>
+                          <td className="py-3 px-3">
+                            <div className="flex gap-1">
+                              {progress?.isStarred && (
+                                <span className="inline-block px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 text-xs">
+                                  ⭐ 星标
+                                </span>
+                              )}
+                              {progress?.recentWrong && (
+                                <span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs">
+                                  近期错词
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${proficiencyColors[prof]}`}>
+                              {proficiencyLabels[prof]}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-gray-600">{progress?.repetitions || 0}</td>
+                          <td className="py-3 px-3 text-gray-600">{progress?.nextReviewDate || '-'}</td>
+                          <td className="py-3 px-3 text-gray-600">{progress?.easeFactor.toFixed(2) || '2.50'}</td>
+                          <td className="py-3 px-3 text-right">
+                            <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                              {!progress?.isStarred ? (
+                                <button
+                                  onClick={() => {
+                                    addWordToIntensive(word.id);
+                                  }}
+                                  className="p-1.5 text-orange-500 hover:bg-orange-50 rounded-lg transition-colors"
+                                  title="加入重点强化"
+                                >
+                                  <Plus className="w-4 h-4" />
+                                  <Zap className="w-4 h-4" />
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => toggleWordStarred(word.id)}
+                                  className="p-1.5 text-yellow-500 hover:bg-yellow-50 rounded-lg transition-colors"
+                                  title="取消星标"
+                                >
+                                  <Star className="w-4 h-4 fill-yellow-400" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+
+                        {isExpanded && progress && (
+                          <tr className="bg-gray-50 border-b border-gray-100">
+                            <td colSpan={8} className="py-4 px-8">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                  <h4 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                                    <BookOpen className="w-4 h-4" />
+                                    单词信息
+                                  </h4>
+                                  <div className="space-y-2 text-sm">
+                                    <div className="flex gap-2">
+                                      <span className="text-gray-500 w-16 shrink-0">释义</span>
+                                      <span className="text-gray-700">{word.definition}</span>
+                                    </div>
+                                    {word.example && (
+                                      <div className="flex gap-2">
+                                        <span className="text-gray-500 w-16 shrink-0">例句</span>
+                                        <div className="text-gray-700">
+                                          <p>{word.example}</p>
+                                          {word.exampleTranslation && (
+                                            <p className="text-gray-500 text-xs mt-1">{word.exampleTranslation}</p>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+                                    {progress.notes && (
+                                      <div className="flex gap-2">
+                                        <span className="text-gray-500 w-16 shrink-0">笔记</span>
+                                        <span className="text-gray-700">{progress.notes}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <h4 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                                    <Clock className="w-4 h-4" />
+                                    最近复习记录
+                                  </h4>
+                                  {progress.reviewHistory && progress.reviewHistory.length > 0 ? (
+                                    <div className="space-y-2 max-h-36 overflow-y-auto">
+                                      {[...progress.reviewHistory].reverse().slice(0, 10).map((record, idx) => (
+                                        <div key={idx} className="flex items-center gap-2 text-sm bg-white rounded-lg p-2 border border-gray-100">
+                                          <span className="text-lg">
+                                            {record.quality === 0 ? '😵' : record.quality === 3 ? '🤔' : '🎉'}
+                                          </span>
+                                          <div className="flex-1">
+                                            <span className="text-gray-600">
+                                              {record.quality === 0 ? '忘记了' : record.quality === 3 ? '有点模糊' : '完全记住'}
+                                            </span>
+                                            {record.mode === 'intensive' && (
+                                              <span className="ml-2 px-1.5 py-0.5 rounded bg-orange-100 text-orange-600 text-xs">
+                                                强化
+                                              </span>
+                                            )}
+                                          </div>
+                                          <span className="text-gray-400 text-xs">{record.date}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="text-sm text-gray-400">暂无复习记录</p>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
               </table>
             </div>
-            {currentDeck.words.length > 10 && (
+            {currentDeck.words.length > 20 && (
               <p className="text-center text-gray-500 text-sm mt-4">
-                显示前10个单词，共 {currentDeck.words.length} 个
+                显示前20个单词，共 {currentDeck.words.length} 个
               </p>
             )}
           </div>

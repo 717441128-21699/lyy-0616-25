@@ -10,6 +10,7 @@ import type {
   Word,
   StudyMode,
   TodayPlan,
+  DailyReviewLog,
 } from '../types';
 import { builtinDecks, createCustomDeck } from '../data/decks';
 import {
@@ -27,7 +28,12 @@ interface StoreState extends AppState {
   setCurrentDeck: (deckId: string) => void;
   addCustomDeck: (name: string, words: Word[]) => void;
   removeDeck: (deckId: string) => void;
-  reviewWord: (wordId: string, result: ReviewResult, responseTime: number, mode?: StudyMode) => void;
+  updateDeckWord: (deckId: string, wordId: string, updates: Partial<Word>) => void;
+  deleteDeckWords: (deckId: string, wordIds: string[]) => void;
+  addDeckWord: (deckId: string, word: Word) => void;
+  reviewWord: (wordId: string, result: ReviewResult, responseTime: number, mode: StudyMode | 'retry') => void;
+  addDailyReviewLog: (log: Omit<DailyReviewLog, 'id' | 'timestamp'>) => void;
+  addWordToIntensive: (wordId: string) => void;
   updateWordNotes: (wordId: string, notes: string) => void;
   updateWordMnemonic: (wordId: string, mnemonic: string) => void;
   toggleWordStarred: (wordId: string) => void;
@@ -47,6 +53,10 @@ interface StoreState extends AppState {
 
 const generateDeviceId = (): string => {
   return 'device-' + Math.random().toString(36).substr(2, 9);
+};
+
+const generateLogId = (): string => {
+  return 'log-' + Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 6);
 };
 
 const emptyPlan: TodayPlan = {
@@ -85,6 +95,7 @@ const getInitialState = (): AppState => {
     todayPlan: emptyPlan,
     completedToday: [],
     completedIntensiveToday: [],
+    dailyReviewLogs: [],
     currentMode: 'normal',
   };
 };
@@ -132,15 +143,17 @@ const updateDailyStats = (
   if (existingStats) {
     dailyStats = progress.dailyStats.map((s) => {
       if (s.date === today) {
-        const totalReviews = s.wordsReviewed + 1;
+        const totalNormal = s.wordsReviewed;
+        const totalReviews = totalNormal + s.intensiveReviewed;
+        const newTotal = totalReviews + 1;
         return {
           ...s,
           newWordsLearned: isNew ? s.newWordsLearned + 1 : s.newWordsLearned,
           wordsReviewed: mode === 'normal' ? s.wordsReviewed + 1 : s.wordsReviewed,
           intensiveReviewed: mode === 'intensive' ? s.intensiveReviewed + 1 : s.intensiveReviewed,
           correctRate: correct
-            ? (s.correctRate * s.wordsReviewed + 1) / totalReviews
-            : (s.correctRate * s.wordsReviewed) / totalReviews,
+            ? (s.correctRate * totalReviews + 1) / newTotal
+            : (s.correctRate * totalReviews) / newTotal,
           totalTimeSpent: s.totalTimeSpent + timeSpent,
         };
       }
@@ -190,22 +203,99 @@ export const useStore = create<StoreState>()(
         });
       },
 
-      reviewWord: (wordId: string, result: ReviewResult, responseTime: number, mode: StudyMode = 'normal') => {
+      updateDeckWord: (deckId: string, wordId: string, updates: Partial<Word>) => {
+        set((state) => {
+          const decks = state.decks.map((deck) => {
+            if (deck.id !== deckId) return deck;
+            return {
+              ...deck,
+              words: deck.words.map((w) =>
+                w.id === wordId ? { ...w, ...updates } : w
+              ),
+              wordCount: deck.words.length,
+            };
+          });
+          return { decks };
+        });
+      },
+
+      deleteDeckWords: (deckId: string, wordIds: string[]) => {
+        const toDelete = new Set(wordIds);
+        set((state) => {
+          const decks = state.decks.map((deck) => {
+            if (deck.id !== deckId) return deck;
+            const newWords = deck.words.filter((w) => !toDelete.has(w.id));
+            return {
+              ...deck,
+              words: newWords,
+              wordCount: newWords.length,
+            };
+          });
+          return { decks };
+        });
+      },
+
+      addDeckWord: (deckId: string, word: Word) => {
+        set((state) => {
+          const decks = state.decks.map((deck) => {
+            if (deck.id !== deckId) return deck;
+            const newWords = [...deck.words, word];
+            return {
+              ...deck,
+              words: newWords,
+              wordCount: newWords.length,
+            };
+          });
+          return { decks };
+        });
+      },
+
+      addDailyReviewLog: (log) => {
+        set((state) => ({
+          dailyReviewLogs: [
+            ...state.dailyReviewLogs,
+            {
+              ...log,
+              id: generateLogId(),
+              timestamp: Date.now(),
+            },
+          ],
+        }));
+      },
+
+      addWordToIntensive: (wordId: string) => {
+        set((state) => {
+          const progress = state.wordProgress[wordId] || initializeWordProgress(wordId);
+          if (progress.isStarred) return state;
+          return {
+            wordProgress: {
+              ...state.wordProgress,
+              [wordId]: { ...progress, isStarred: true },
+            },
+          };
+        });
+      },
+
+      reviewWord: (wordId: string, result: ReviewResult, responseTime: number, mode: StudyMode | 'retry' = 'normal') => {
         const quality = mapResultToQuality(result);
         const correct = result !== 'forgot';
+        const actualMode: StudyMode = mode === 'retry' ? 'normal' : mode;
 
         set((state) => {
           const existingProgress = state.wordProgress[wordId] || initializeWordProgress(wordId);
           const isNew = existingProgress.repetitions === 0;
-          const newProgress = calculateNextReview(existingProgress, quality, responseTime, mode);
+          const newProgress = calculateNextReview(existingProgress, quality, responseTime, actualMode);
 
-          const userProgress = updateDailyStats(
-            updateStreak(state.userProgress),
-            isNew,
-            correct,
-            responseTime,
-            mode
-          );
+          let userProgress = state.userProgress;
+          if (mode !== 'retry') {
+            userProgress = updateDailyStats(
+              updateStreak(state.userProgress),
+              isNew,
+              correct,
+              responseTime,
+              actualMode
+            );
+          }
 
           const allProgress = {
             ...state.wordProgress,
@@ -222,27 +312,37 @@ export const useStore = create<StoreState>()(
 
           const masteryRate = totalWordsLearned > 0 ? masteredCount / totalWordsLearned : 0;
 
-          const completedToday = state.completedToday.includes(wordId)
-            ? state.completedToday
-            : [...state.completedToday, wordId];
+          const completedToday = (mode === 'normal' && !state.completedToday.includes(wordId))
+            ? [...state.completedToday, wordId]
+            : state.completedToday;
 
-          const completedIntensiveToday = mode === 'intensive'
-            ? (state.completedIntensiveToday.includes(wordId)
-              ? state.completedIntensiveToday
-              : [...state.completedIntensiveToday, wordId])
+          const completedIntensiveToday = (mode === 'intensive' && !state.completedIntensiveToday.includes(wordId))
+            ? [...state.completedIntensiveToday, wordId]
             : state.completedIntensiveToday;
+
+          const newLog: DailyReviewLog = {
+            id: generateLogId(),
+            wordId,
+            result,
+            mode,
+            timestamp: Date.now(),
+            responseTime,
+          };
+
+          const addReviews = mode !== 'retry' ? 1 : 0;
 
           return {
             wordProgress: allProgress,
             userProgress: {
               ...userProgress,
               totalWordsLearned,
-              totalReviews: state.userProgress.totalReviews + (mode === 'normal' ? 1 : 0),
-              totalIntensiveReviews: state.userProgress.totalIntensiveReviews + (mode === 'intensive' ? 1 : 0),
+              totalReviews: state.userProgress.totalReviews + (mode === 'normal' ? addReviews : 0),
+              totalIntensiveReviews: state.userProgress.totalIntensiveReviews + (mode === 'intensive' ? addReviews : 0),
               masteryRate,
             },
             completedToday,
             completedIntensiveToday,
+            dailyReviewLogs: [...state.dailyReviewLogs, newLog],
           };
         });
       },
@@ -389,6 +489,8 @@ export const useStore = create<StoreState>()(
           userProgress: state.userProgress,
           userSettings: state.userSettings,
           completedToday: state.completedToday,
+          completedIntensiveToday: state.completedIntensiveToday,
+          dailyReviewLogs: state.dailyReviewLogs,
           exportTime: new Date().toISOString(),
           version: '2.0',
         };
@@ -410,6 +512,8 @@ export const useStore = create<StoreState>()(
             userProgress: data.userProgress || state.userProgress,
             userSettings: { ...state.userSettings, ...data.userSettings },
             completedToday: data.completedToday || state.completedToday,
+            completedIntensiveToday: data.completedIntensiveToday || state.completedIntensiveToday,
+            dailyReviewLogs: data.dailyReviewLogs || state.dailyReviewLogs,
           }));
 
           setTimeout(() => get().regenerateTodayPlan(), 0);
@@ -473,6 +577,7 @@ export const useStore = create<StoreState>()(
         completedToday: state.completedToday,
         completedIntensiveToday: state.completedIntensiveToday,
         todayPlan: state.todayPlan,
+        dailyReviewLogs: state.dailyReviewLogs,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
@@ -482,6 +587,7 @@ export const useStore = create<StoreState>()(
           if (lastStudyDate !== today) {
             state.completedToday = [];
             state.completedIntensiveToday = [];
+            state.dailyReviewLogs = [];
             state.currentMode = 'normal';
             state.todayPlan = {
               ...emptyPlan,
@@ -492,7 +598,7 @@ export const useStore = create<StoreState>()(
           }
 
           setTimeout(() => {
-            state.regenerateTodayPlan();
+            state.regenerateTodayPlan?.();
           }, 0);
         }
       },

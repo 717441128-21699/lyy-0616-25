@@ -93,7 +93,17 @@ export interface AppState {
   todayPlan: TodayPlan;
   completedToday: string[];
   completedIntensiveToday: string[];
+  dailyReviewLogs: DailyReviewLog[];
   currentMode: StudyMode;
+}
+
+export interface DailyReviewLog {
+  id: string;
+  wordId: string;
+  result: ReviewResult;
+  mode: StudyMode | 'retry';
+  timestamp: number;
+  responseTime: number;
 }
 
 export interface ImportPreviewItem {

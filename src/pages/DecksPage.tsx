@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Book, Plus, Trash2, Check, GraduationCap, Globe, Award, FileText, Zap, Star } from 'lucide-react';
+import { Book, Plus, Trash2, Check, GraduationCap, Globe, Award, FileText, Zap, Star, Edit3 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { DeckImportModal } from '../components/DeckImportModal';
+import { DeckEditorModal } from '../components/DeckEditorModal';
 
 const categoryIcons = {
   cet4: GraduationCap,
@@ -20,8 +21,19 @@ const categoryColors = {
 };
 
 export const DecksPage: React.FC = () => {
-  const { decks, currentDeckId, setCurrentDeck, addCustomDeck, removeDeck, wordProgress } = useStore();
+  const {
+    decks,
+    currentDeckId,
+    setCurrentDeck,
+    addCustomDeck,
+    removeDeck,
+    wordProgress,
+    updateDeckWord,
+    deleteDeckWords,
+    addDeckWord,
+  } = useStore();
   const [showImport, setShowImport] = useState(false);
+  const [editingDeckId, setEditingDeckId] = useState<string | null>(null);
 
   const getDeckProgress = (deckId: string) => {
     const deck = decks.find(d => d.id === deckId);
@@ -93,12 +105,24 @@ export const DecksPage: React.FC = () => {
                 )}
 
                 {deck.category === 'custom' && (
-                  <button
-                    onClick={(e) => handleRemoveDeck(deck.id, e)}
-                    className="absolute top-4 right-14 p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors z-10"
-                  >
-                    <Trash2 className="w-5 h-5" />
-                  </button>
+                  <>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingDeckId(deck.id);
+                      }}
+                      className="absolute top-4 right-14 p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors z-10"
+                      title="编辑词库"
+                    >
+                      <Edit3 className="w-5 h-5" />
+                    </button>
+                    <button
+                      onClick={(e) => handleRemoveDeck(deck.id, e)}
+                      className="absolute top-4 right-4 p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors z-10"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </>
                 )}
 
                 <div className={`w-14 h-14 rounded-xl bg-gradient-to-br ${categoryColors[deck.category]} flex items-center justify-center mb-4`}>
@@ -165,6 +189,21 @@ export const DecksPage: React.FC = () => {
         onClose={() => setShowImport(false)}
         onImport={(name, words) => {
           addCustomDeck(name, words);
+        }}
+      />
+
+      <DeckEditorModal
+        isOpen={editingDeckId !== null}
+        deck={decks.find(d => d.id === editingDeckId) || null}
+        onClose={() => setEditingDeckId(null)}
+        onUpdateWord={(wordId, updates) => {
+          if (editingDeckId) updateDeckWord(editingDeckId, wordId, updates);
+        }}
+        onDeleteWords={(wordIds) => {
+          if (editingDeckId) deleteDeckWords(editingDeckId, wordIds);
+        }}
+        onAddWord={(word) => {
+          if (editingDeckId) addDeckWord(editingDeckId, word);
         }}
       />
     </div>
