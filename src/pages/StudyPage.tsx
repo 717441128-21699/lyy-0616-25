@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Sparkles, Target, Brain, Minus, Plus, Zap, Trophy, ArrowLeft, BookOpen } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Sparkles, Target, Brain, Minus, Plus, Zap, Trophy, ArrowLeft, Repeat } from 'lucide-react';
 import { WordCard } from '../components/WordCard';
 import { useStore } from '../store/useStore';
 import type { ReviewResult, StudyMode } from '../types';
@@ -8,6 +8,8 @@ interface FeedbackState {
   show: boolean;
   result: ReviewResult;
 }
+
+type PracticeMode = 'normal' | 'intensive' | 'retry';
 
 export const StudyPage: React.FC = () => {
   const {
@@ -27,39 +29,87 @@ export const StudyPage: React.FC = () => {
   } = useStore();
 
   const [feedback, setFeedback] = useState<FeedbackState>({ show: false, result: 'remembered' });
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [showCompletion, setShowCompletion] = useState(false);
+
+  const [normalIndex, setNormalIndex] = useState(0);
+  const [intensiveIndex, setIntensiveIndex] = useState(0);
+
+  const [normalQueueSnapshot, setNormalQueueSnapshot] = useState<string[]>([]);
+  const [intensiveQueueSnapshot, setIntensiveQueueSnapshot] = useState<string[]>([]);
+
+  const [practiceMode, setPracticeMode] = useState<PracticeMode>('normal');
+  const [retryQueue, setRetryQueue] = useState<string[]>([]);
+  const [retryIndex, setRetryIndex] = useState(0);
+  const [lastCompletedNormalQueue, setLastCompletedNormalQueue] = useState<string[]>([]);
+  const [lastCompletedIntensiveQueue, setLastCompletedIntensiveQueue] = useState<string[]>([]);
+
+  const [showCompletion, setShowCompletion] = useState<StudyMode | 'retry' | null>(null);
   const [cardKey, setCardKey] = useState(0);
+
+  const initialized = useRef(false);
 
   useEffect(() => {
     regenerateTodayPlan();
   }, [regenerateTodayPlan]);
 
-  const normalQueue = useMemo(() => getCurrentQueue(), [getCurrentQueue, todayPlan, completedToday]);
-  const intensiveQueue = useMemo(() => getIntensiveQueue(), [getIntensiveQueue, todayPlan, completedIntensiveToday]);
-
-  const currentQueue = currentMode === 'intensive' ? intensiveQueue : normalQueue;
-  const queueKey = `${currentMode}-${currentQueue.join(',')}`;
+  const rawNormalQueue = useMemo(() => getCurrentQueue(), [getCurrentQueue]);
+  const rawIntensiveQueue = useMemo(() => getIntensiveQueue(), [getIntensiveQueue]);
 
   useEffect(() => {
-    setCurrentIndex(0);
-    setShowCompletion(false);
-  }, [queueKey, currentMode]);
+    if (!initialized.current) {
+      setNormalQueueSnapshot(rawNormalQueue);
+      setIntensiveQueueSnapshot(rawIntensiveQueue);
+      initialized.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (normalQueueSnapshot.length === 0 && rawNormalQueue.length > 0) {
+      setNormalQueueSnapshot(rawNormalQueue);
+    }
+    if (intensiveQueueSnapshot.length === 0 && rawIntensiveQueue.length > 0) {
+      setIntensiveQueueSnapshot(rawIntensiveQueue);
+    }
+  }, [rawNormalQueue, rawIntensiveQueue, normalQueueSnapshot.length, intensiveQueueSnapshot.length]);
+
+  const getCurrentQueueState = () => {
+    switch (practiceMode) {
+      case 'retry':
+        return { queue: retryQueue, index: retryIndex, completed: retryIndex };
+      case 'intensive':
+        return { queue: intensiveQueueSnapshot, index: intensiveIndex, completed: completedIntensiveToday.length };
+      default:
+        return { queue: normalQueueSnapshot, index: normalIndex, completed: completedToday.length };
+    }
+  };
+
+  const { queue: currentQueue, index: currentIndex } = getCurrentQueueState();
+  const effectiveMode: StudyMode = practiceMode === 'retry' ? 'normal' : currentMode;
 
   const currentWordId = currentQueue[currentIndex];
   const currentWord = currentWordId ? getWordById(currentWordId) : null;
   const currentProgress = currentWordId ? getWordProgress(currentWordId) : null;
 
-  const totalTasks = todayPlan.reviewWords.length + todayPlan.newWords.length;
-  const completedNormal = completedToday.length;
+  const totalNormalTasks = todayPlan.reviewWords.length + todayPlan.newWords.length;
+  const totalIntensiveTasks = intensiveQueueSnapshot.length;
+
+  const switchToMode = (mode: StudyMode) => {
+    if (currentMode !== mode) {
+      setCurrentMode(mode);
+    }
+    setPracticeMode(mode);
+    setShowCompletion(null);
+    setCardKey((k) => k + 1);
+  };
 
   const handleReview = useCallback((result: ReviewResult) => {
     if (!currentWordId) return;
 
     const startTime = performance.now();
-    const responseTime = Math.round((performance.now() - startTime) / 1000);
+    const responseTime = Math.max(1, Math.round((performance.now() - startTime) / 100));
 
-    reviewWord(currentWordId, result, responseTime, currentMode);
+    if (practiceMode !== 'retry') {
+      reviewWord(currentWordId, result, responseTime, effectiveMode);
+    }
 
     setFeedback({ show: true, result });
     setCardKey((k) => k + 1);
@@ -68,19 +118,77 @@ export const StudyPage: React.FC = () => {
       setFeedback({ show: false, result: 'remembered' });
 
       const nextIndex = currentIndex + 1;
-      if (nextIndex >= currentQueue.length) {
-        setShowCompletion(true);
+      const totalCount = currentQueue.length;
+
+      if (nextIndex >= totalCount && totalCount > 0) {
+        if (practiceMode === 'normal') {
+          setLastCompletedNormalQueue([...currentQueue]);
+        } else if (practiceMode === 'intensive') {
+          setLastCompletedIntensiveQueue([...currentQueue]);
+        }
+        setShowCompletion(practiceMode === 'retry' ? 'retry' : currentMode);
       } else {
-        setCurrentIndex(nextIndex);
+        switch (practiceMode) {
+          case 'retry':
+            setRetryIndex(nextIndex);
+            break;
+          case 'intensive':
+            setIntensiveIndex(nextIndex);
+            break;
+          default:
+            setNormalIndex(nextIndex);
+        }
       }
     }, 600);
-  }, [currentWordId, currentIndex, currentQueue.length, reviewWord, currentMode]);
+  }, [
+    currentWordId,
+    currentIndex,
+    currentQueue,
+    practiceMode,
+    currentMode,
+    effectiveMode,
+    reviewWord,
+  ]);
 
-  const switchMode = (mode: StudyMode) => {
-    setCurrentMode(mode);
-    setShowCompletion(false);
-    setCurrentIndex(0);
+  const handleLimitAdjust = (type: 'new' | 'review' | 'intensive', delta: number) => {
+    adjustTodayPlanLimit(type, delta);
+    setTimeout(() => {
+      if (type === 'intensive') {
+        setIntensiveQueueSnapshot(getIntensiveQueue());
+      } else {
+        setNormalQueueSnapshot(getCurrentQueue());
+      }
+    }, 50);
+  };
+
+  const startRetryPractice = () => {
+    let queue: string[] = [];
+    if (showCompletion === 'intensive') {
+      queue = [...lastCompletedIntensiveQueue];
+    } else {
+      queue = [...lastCompletedNormalQueue];
+    }
+
+    if (queue.length === 0) {
+      if (showCompletion === 'intensive') {
+        queue = [...intensiveQueueSnapshot];
+      } else {
+        queue = [...normalQueueSnapshot];
+      }
+    }
+
+    setRetryQueue(queue);
+    setRetryIndex(0);
+    setPracticeMode('retry');
+    setShowCompletion(null);
     setCardKey((k) => k + 1);
+  };
+
+  const exitRetryPractice = () => {
+    setPracticeMode(currentMode);
+    setShowCompletion(currentMode);
+    setRetryQueue([]);
+    setRetryIndex(0);
   };
 
   const getFeedbackColor = () => {
@@ -107,6 +215,18 @@ export const StudyPage: React.FC = () => {
     }
   };
 
+  const getCompletionTitle = () => {
+    if (showCompletion === 'retry') return '再练一遍完成！';
+    if (showCompletion === 'intensive') return '强化训练完成！';
+    return '今日任务完成！';
+  };
+
+  const getCompletionSubtitle = () => {
+    if (showCompletion === 'retry') return `重练了 ${retryQueue.length} 个单词`;
+    if (showCompletion === 'intensive') return `完成了 ${completedIntensiveToday.length} 个重点单词强化`;
+    return `完成了 ${completedToday.length} 个单词，继续加油！`;
+  };
+
   if (showCompletion) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
@@ -114,31 +234,67 @@ export const StudyPage: React.FC = () => {
           <div className="w-24 h-24 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center mx-auto mb-6">
             <Trophy className="w-12 h-12 text-white" />
           </div>
-          <h2 className="text-3xl font-bold text-gray-800 mb-3">
-            {currentMode === 'intensive' ? '强化训练完成！' : '今日任务完成！'}
-          </h2>
-          <p className="text-gray-500 mb-8">
-            {currentMode === 'intensive'
-              ? `完成了 ${completedIntensiveToday.length} 个重点单词强化`
-              : `完成了 ${completedNormal} 个单词，继续加油！`}
-          </p>
+          <h2 className="text-3xl font-bold text-gray-800 mb-3">{getCompletionTitle()}</h2>
+          <p className="text-gray-500 mb-8">{getCompletionSubtitle()}</p>
 
           <div className="space-y-3">
-            {currentMode === 'normal' && intensiveQueue.length > 0 && (
+            {showCompletion !== 'retry' && (
               <button
-                onClick={() => switchMode('intensive')}
+                onClick={startRetryPractice}
+                className="w-full py-4 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-2xl font-semibold flex items-center justify-center gap-2 hover:scale-105 transition-transform"
+              >
+                <Repeat className="w-5 h-5" />
+                再练一遍（不影响统计）
+              </button>
+            )}
+
+            {showCompletion === 'retry' && (
+              <button
+                onClick={exitRetryPractice}
+                className="w-full py-4 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-2xl font-semibold flex items-center justify-center gap-2 hover:scale-105 transition-transform"
+              >
+                <ArrowLeft className="w-5 h-5" />
+                返回完成页
+              </button>
+            )}
+
+            {showCompletion === 'normal' && rawIntensiveQueue.length > 0 && (
+              <button
+                onClick={() => switchToMode('intensive')}
                 className="w-full py-4 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-2xl font-semibold flex items-center justify-center gap-2 hover:scale-105 transition-transform"
               >
                 <Zap className="w-5 h-5" />
-                开始重点强化训练 ({intensiveQueue.length}个)
+                开始重点强化训练
               </button>
             )}
-            <button
-              onClick={() => { setShowCompletion(false); setCurrentIndex(0); setCardKey(k => k + 1); }}
-              className="w-full py-4 bg-gray-100 text-gray-700 rounded-2xl font-semibold hover:bg-gray-200 transition-colors"
-            >
-              再练一遍
-            </button>
+
+            {showCompletion !== 'retry' && (
+              <button
+                onClick={() => {
+                  if (showCompletion === 'intensive') {
+                    setIntensiveIndex(0);
+                    setIntensiveQueueSnapshot([...rawIntensiveQueue]);
+                  } else {
+                    setNormalIndex(0);
+                    setNormalQueueSnapshot([...rawNormalQueue]);
+                  }
+                  setShowCompletion(null);
+                  setCardKey(k => k + 1);
+                }}
+                className="w-full py-4 bg-gray-100 text-gray-700 rounded-2xl font-semibold hover:bg-gray-200 transition-colors"
+              >
+                重新从第1张开始
+              </button>
+            )}
+
+            {showCompletion !== 'retry' && (
+              <button
+                onClick={() => switchToMode(showCompletion === 'intensive' ? 'normal' : 'intensive')}
+                className="w-full py-4 text-gray-600 rounded-2xl font-medium hover:bg-gray-50 transition-colors"
+              >
+                {showCompletion === 'intensive' ? '返回今日任务' : '切换到强化训练'}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -152,62 +308,87 @@ export const StudyPage: React.FC = () => {
           <div className="w-20 h-20 bg-gradient-to-br from-green-400 to-emerald-500 rounded-full flex items-center justify-center mx-auto mb-6">
             <Trophy className="w-10 h-10 text-white" />
           </div>
-          <h2 className="text-2xl font-bold text-gray-800 mb-3">太棒了！</h2>
-          <p className="text-gray-500 mb-6">今日的所有任务都已完成</p>
-          {intensiveQueue.length > 0 && (
-            <button
-              onClick={() => switchMode('intensive')}
-              className="w-full py-4 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-2xl font-semibold flex items-center justify-center gap-2"
-            >
-              <Zap className="w-5 h-5" />
-              进行重点强化训练
-            </button>
-          )}
+          <h2 className="text-2xl font-bold text-gray-800 mb-3">
+            {practiceMode === 'retry' ? '没有可重练的词' : (practiceMode === 'intensive' ? '暂无需强化的单词' : '今日的所有任务都已完成')}
+          </h2>
+          <p className="text-gray-500 mb-6">
+            {practiceMode === 'intensive'
+              ? '将单词标星或答错后会出现在这里'
+              : '可以调整今日计划数量或切换模式继续学习'}
+          </p>
+          <div className="space-y-3">
+            {practiceMode !== 'normal' && (
+              <button
+                onClick={() => switchToMode('normal')}
+                className="w-full py-4 bg-gradient-to-r from-primary-500 to-purple-500 text-white rounded-2xl font-semibold"
+              >
+                返回今日任务
+              </button>
+            )}
+            {practiceMode === 'normal' && rawIntensiveQueue.length > 0 && (
+              <button
+                onClick={() => switchToMode('intensive')}
+                className="w-full py-4 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-2xl font-semibold flex items-center justify-center gap-2"
+              >
+                <Zap className="w-5 h-5" />
+                进行重点强化训练
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
   }
 
+  const displayCurrentMode: StudyMode = practiceMode === 'retry' ? currentMode : practiceMode;
+
   return (
     <div className="min-h-screen pb-32">
       <div className="max-w-4xl mx-auto p-4 md:p-6">
         <div className="flex items-center justify-between mb-6">
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button
-              onClick={() => switchMode('normal')}
+              onClick={() => switchToMode('normal')}
               className={`px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-all ${
-                currentMode === 'normal'
+                displayCurrentMode === 'normal' && practiceMode !== 'retry'
                   ? 'bg-white text-primary-600 shadow-lg'
                   : 'bg-white/20 text-white hover:bg-white/30'
               }`}
             >
-              <BookOpen className="w-4 h-4" />
+              <Target className="w-4 h-4" />
               今日任务
             </button>
             <button
-              onClick={() => switchMode('intensive')}
+              onClick={() => switchToMode('intensive')}
               className={`px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-all ${
-                currentMode === 'intensive'
+                displayCurrentMode === 'intensive'
                   ? 'bg-gradient-to-r from-orange-500 to-red-500 text-white shadow-lg'
                   : 'bg-white/20 text-white hover:bg-white/30'
               }`}
             >
               <Zap className="w-4 h-4" />
               重点强化
-              {intensiveQueue.length > 0 && (
+              {rawIntensiveQueue.length > 0 && (
                 <span className="bg-white/30 px-2 py-0.5 rounded-full text-xs">
-                  {intensiveQueue.length}
+                  {rawIntensiveQueue.length}
                 </span>
               )}
             </button>
+            {practiceMode === 'retry' && (
+              <span className="px-4 py-2 rounded-xl font-medium flex items-center gap-2 bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg">
+                <Repeat className="w-4 h-4" />
+                再练一遍（不计入统计）
+              </span>
+            )}
           </div>
 
-          <div className="text-white/90 font-medium">
+          <div className="text-white/90 font-medium bg-white/10 px-4 py-2 rounded-xl">
             {currentIndex + 1} / {currentQueue.length}
+            {practiceMode === 'retry' && <span className="ml-2 text-blue-300 text-sm">重练中</span>}
           </div>
         </div>
 
-        {currentMode === 'normal' && (
+        {practiceMode === 'normal' && (
           <div className="bg-white/10 backdrop-blur-md rounded-2xl p-5 mb-6 border border-white/20">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-white font-semibold flex items-center gap-2">
@@ -215,7 +396,7 @@ export const StudyPage: React.FC = () => {
                 今日学习计划
               </h3>
               <span className="text-white/70 text-sm">
-                已完成 {completedNormal}/{totalTasks}
+                已完成 {completedToday.length}/{totalNormalTasks}
               </span>
             </div>
 
@@ -227,8 +408,8 @@ export const StudyPage: React.FC = () => {
                 totalCount={todayPlan.newWords.length}
                 limit={todayPlan.newWordsLimit || userSettings.dailyNewWords}
                 color="from-blue-500 to-cyan-500"
-                onMinus={() => adjustTodayPlanLimit('new', -5)}
-                onPlus={() => adjustTodayPlanLimit('new', 5)}
+                onMinus={() => handleLimitAdjust('new', -5)}
+                onPlus={() => handleLimitAdjust('new', 5)}
               />
               <PlanItem
                 icon={<Brain className="w-4 h-4" />}
@@ -237,31 +418,31 @@ export const StudyPage: React.FC = () => {
                 totalCount={todayPlan.reviewWords.length}
                 limit={todayPlan.reviewWordsLimit || userSettings.dailyReviewWords}
                 color="from-green-500 to-emerald-500"
-                onMinus={() => adjustTodayPlanLimit('review', -5)}
-                onPlus={() => adjustTodayPlanLimit('review', 5)}
+                onMinus={() => handleLimitAdjust('review', -5)}
+                onPlus={() => handleLimitAdjust('review', 5)}
               />
               <PlanItem
                 icon={<Zap className="w-4 h-4" />}
                 label="重点强化"
                 currentCount={completedIntensiveToday.length}
-                totalCount={todayPlan.intensiveWords.length}
+                totalCount={totalIntensiveTasks}
                 limit={todayPlan.intensiveWordsLimit || userSettings.dailyIntensiveWords}
                 color="from-orange-500 to-red-500"
-                onMinus={() => adjustTodayPlanLimit('intensive', -5)}
-                onPlus={() => adjustTodayPlanLimit('intensive', 5)}
+                onMinus={() => handleLimitAdjust('intensive', -5)}
+                onPlus={() => handleLimitAdjust('intensive', 5)}
               />
             </div>
 
             <div className="h-2 bg-white/20 rounded-full overflow-hidden">
               <div
                 className="h-full bg-gradient-to-r from-green-400 to-emerald-500 rounded-full transition-all duration-500"
-                style={{ width: `${totalTasks > 0 ? (completedNormal / totalTasks) * 100 : 0}%` }}
+                style={{ width: `${totalNormalTasks > 0 ? Math.min(100, (completedToday.length / totalNormalTasks) * 100) : 0}%` }}
               />
             </div>
           </div>
         )}
 
-        {currentMode === 'intensive' && (
+        {practiceMode === 'intensive' && (
           <div className="bg-gradient-to-r from-orange-500/30 to-red-500/30 backdrop-blur-md rounded-2xl p-5 mb-6 border border-orange-300/30">
             <div className="flex items-center justify-between">
               <div>
@@ -273,18 +454,39 @@ export const StudyPage: React.FC = () => {
               </div>
               <div className="text-right">
                 <div className="text-2xl font-bold text-white">
-                  {completedIntensiveToday}/{todayPlan.intensiveWords.length + intensiveQueue.length}
+                  {completedIntensiveToday.length}/{totalIntensiveTasks + (intensiveQueueSnapshot.length - completedIntensiveToday.length > 0 ? 0 : 0)}
                 </div>
                 <div className="text-white/70 text-sm">已完成</div>
               </div>
             </div>
             <button
-              onClick={() => switchMode('normal')}
+              onClick={() => switchToMode('normal')}
               className="mt-4 flex items-center gap-1 text-white/80 hover:text-white text-sm transition-colors"
             >
               <ArrowLeft className="w-4 h-4" />
               返回今日任务
             </button>
+          </div>
+        )}
+
+        {practiceMode === 'retry' && (
+          <div className="bg-gradient-to-r from-blue-500/30 to-cyan-500/30 backdrop-blur-md rounded-2xl p-5 mb-6 border border-blue-300/30">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-white font-semibold flex items-center gap-2 mb-1">
+                  <Repeat className="w-5 h-5" />
+                  再练一遍模式
+                </h3>
+                <p className="text-white/70 text-sm">本次练习不影响学习统计</p>
+              </div>
+              <button
+                onClick={exitRetryPractice}
+                className="flex items-center gap-1 px-3 py-2 bg-white/20 hover:bg-white/30 rounded-xl text-white text-sm transition-colors"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                退出重练
+              </button>
+            </div>
           </div>
         )}
 
@@ -352,8 +554,9 @@ const PlanItem: React.FC<PlanItemProps> = ({
   onMinus,
   onPlus,
 }) => {
+  const progressPct = totalCount > 0 ? Math.min(100, (currentCount / Math.max(totalCount, limit)) * 100) : 0;
   return (
-    <div className={`bg-gradient-to-br ${color} bg-opacity-20 rounded-xl p-3 border border-white/20`}>
+    <div className={`bg-gradient-to-br ${color} rounded-xl p-3 border border-white/20`}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2 text-white">
           {icon}
@@ -381,7 +584,7 @@ const PlanItem: React.FC<PlanItemProps> = ({
       <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
         <div
           className="h-full bg-white/80 rounded-full transition-all duration-300"
-          style={{ width: `${Math.min(100, totalCount > 0 ? (currentCount / Math.max(totalCount, limit)) * 100 : 0)}%` }}
+          style={{ width: `${progressPct}%` }}
         />
       </div>
       <div className="text-white/60 text-xs mt-1">目标: {limit}个</div>

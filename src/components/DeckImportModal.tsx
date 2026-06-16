@@ -127,7 +127,7 @@ export const DeckImportModal: React.FC<DeckImportModalProps> = ({ isOpen, onClos
     onClose();
   };
 
-  const parseInput = useCallback((input: string) => {
+  const doParse = useCallback((input: string, overrideMapping?: Record<string, number>, useOverride: boolean = false) => {
     const lines = input.split(/\r?\n/).filter(l => l.trim().length > 0);
     if (lines.length === 0) {
       setPreview([]);
@@ -139,7 +139,10 @@ export const DeckImportModal: React.FC<DeckImportModalProps> = ({ isOpen, onClos
     let startIdx = 0;
     let mapping: Record<string, number> = {};
 
-    if (hasHeader) {
+    if (useOverride && overrideMapping && Object.keys(overrideMapping).length > 0) {
+      mapping = { ...overrideMapping };
+      if (hasHeader) startIdx = 1;
+    } else if (hasHeader) {
       const headerLine = parseCSVLine(lines[0]);
       mapping = detectColumnMapping(headerLine);
       if (Object.keys(mapping).length > 0) {
@@ -157,7 +160,9 @@ export const DeckImportModal: React.FC<DeckImportModalProps> = ({ isOpen, onClos
       };
     }
 
-    setColumnMapping(mapping);
+    if (!useOverride) {
+      setColumnMapping(mapping);
+    }
 
     const items: ImportPreviewItem[] = [];
 
@@ -191,6 +196,10 @@ export const DeckImportModal: React.FC<DeckImportModalProps> = ({ isOpen, onClos
     setPreview(items);
     setStep('preview');
   }, [hasHeader]);
+
+  const parseInput = useCallback((input: string) => {
+    doParse(input, undefined, false);
+  }, [doParse]);
 
   const detectDelimiter = (text: string): 'tsv' | 'csv' | 'unknown' => {
     const firstLine = text.split(/\r?\n/)[0] || '';
@@ -268,17 +277,17 @@ export const DeckImportModal: React.FC<DeckImportModalProps> = ({ isOpen, onClos
   };
 
   const updateFieldMapping = (field: string, index: number) => {
-    setColumnMapping(prev => ({
-      ...prev,
+    const newMapping = {
+      ...columnMapping,
       [field]: index,
-    }));
+    };
+    setColumnMapping(newMapping);
+    setTimeout(() => {
+      doParse(textInput, newMapping, true);
+    }, 30);
   };
 
-  const applyNewMapping = () => {
-    if (textInput.trim().length > 0) {
-      parseInput(textInput);
-    }
-  };
+
 
   const sampleCSV = `单词,音标,释义,例句,例句翻译
 abandon,/əˈbændən/,v. 放弃；抛弃,"He abandoned his family.",他抛弃了他的家庭。
@@ -386,7 +395,9 @@ ability,/əˈbɪləti/,n. 能力；才能,"She has the ability to succeed.",她�
                     <input
                       type="checkbox"
                       checked={hasHeader}
-                      onChange={(e) => setHasHeader(e.target.checked)}
+                      onChange={(e) => {
+                        setHasHeader(e.target.checked);
+                      }}
                       className="w-4 h-4 rounded border-gray-300"
                     />
                     <span className="text-sm text-gray-700">首行为列标题（自动识别）</span>
@@ -394,6 +405,9 @@ ability,/əˈbɪləti/,n. 能力；才能,"She has the ability to succeed.",她�
 
                   <div>
                     <p className="text-sm font-medium text-gray-700 mb-2">列字段映射</p>
+                    <p className="text-xs text-gray-500 mb-2">
+                      修改后会立即更新预览。列索引从 0 开始（0=第一列，1=第二列...）
+                    </p>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                       {CSV_COLUMN_HINTS.map(col => (
                         <div key={col.name} className="flex items-center gap-2">
@@ -406,7 +420,6 @@ ability,/əˈbɪləti/,n. 能力；才能,"She has the ability to succeed.",她�
                             min="0"
                             value={columnMapping[col.name] ?? ''}
                             onChange={(e) => updateFieldMapping(col.name, parseInt(e.target.value) || 0)}
-                            onBlur={applyNewMapping}
                             className="flex-1 w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-primary-500 outline-none"
                             placeholder="列索引"
                           />
@@ -420,6 +433,66 @@ ability,/əˈbɪləti/,n. 能力；才能,"She has the ability to succeed.",她�
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-5 space-y-4">
+            <div className="border border-gray-200 rounded-xl overflow-hidden">
+              <button
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="w-full flex items-center justify-between p-3 hover:bg-gray-50 transition-colors bg-gray-50"
+              >
+                <span className="font-medium text-gray-700 text-sm">调整列映射（点击展开）</span>
+                {showAdvanced
+                  ? <ChevronUp className="w-4 h-4 text-gray-500" />
+                  : <ChevronDown className="w-4 h-4 text-gray-500" />
+                }
+              </button>
+
+              {showAdvanced && (
+                <div className="p-4 space-y-3 border-t border-gray-100 bg-white">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={hasHeader}
+                      onChange={(e) => {
+                        setHasHeader(e.target.checked);
+                        setTimeout(() => {
+                          if (e.target.checked) {
+                            parseInput(textInput);
+                          } else {
+                            doParse(textInput, columnMapping, true);
+                          }
+                        }, 30);
+                      }}
+                      className="w-4 h-4 rounded border-gray-300"
+                    />
+                    <span className="text-sm text-gray-700">首行为列标题</span>
+                  </label>
+
+                  <div>
+                    <p className="text-xs text-gray-500 mb-2">
+                      修改后立即刷新预览。列索引从 0 开始
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {CSV_COLUMN_HINTS.map(col => (
+                        <div key={col.name} className="flex items-center gap-2">
+                          <span className="text-xs text-gray-500 w-20 shrink-0">
+                            {col.label}
+                            {col.required && <span className="text-red-500 ml-1">*</span>}
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            value={columnMapping[col.name] ?? ''}
+                            onChange={(e) => updateFieldMapping(col.name, parseInt(e.target.value) || 0)}
+                            className="flex-1 w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-primary-500 outline-none"
+                            placeholder="列索引"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {validWords.length > 0 && (
               <div className="p-4 bg-green-50 rounded-xl border border-green-200">
                 <div className="flex items-center gap-2 mb-2">
