@@ -15,10 +15,11 @@ import {
 } from 'chart.js';
 import {
   BarChart2, Flame, BookOpen, Brain, TrendingUp, Calendar, Zap, Star,
-  ChevronDown, ChevronUp, Clock, Plus,
+  ChevronDown, ChevronUp, Clock, Plus, Search, ChevronLeft,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { predictMemoryCurve, formatDate, addDays } from '../utils/spacedRepetition';
+import { ReviewCalendar } from '../components/ReviewCalendar';
 
 ChartJS.register(
   CategoryScale,
@@ -44,6 +45,12 @@ export const StatsPage: React.FC = () => {
   } = useStore();
   const currentDeck = getCurrentDeck();
   const [expandedWordId, setExpandedWordId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [proficiencyFilter, setProficiencyFilter] = useState<string>('all');
+  const [tagFilter, setTagFilter] = useState<string>('all');
+  const [reviewTimeFilter, setReviewTimeFilter] = useState<string>('all');
+  const [page, setPage] = useState(0);
+  const pageSize = 30;
 
   const starAndRecentWrongStats = useMemo(() => {
     const allProgress = Object.values(wordProgress);
@@ -351,11 +358,62 @@ export const StatsPage: React.FC = () => {
           </div>
         </div>
 
+        <div className="mb-6">
+          <ReviewCalendar />
+        </div>
+
         {currentDeck && (
           <div className="bg-white rounded-2xl p-6 shadow-xl">
             <h3 className="text-lg font-bold text-gray-800 mb-4">
-              当前词库：{currentDeck.name} - 单词详情
+              当前词库：{currentDeck.name} - 单词台账
             </h3>
+
+            <div className="flex flex-wrap gap-3 mb-4">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); setPage(0); }}
+                  placeholder="搜索单词或释义..."
+                  className="w-full pl-9 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none text-sm"
+                />
+              </div>
+
+              <select
+                value={proficiencyFilter}
+                onChange={(e) => { setProficiencyFilter(e.target.value); setPage(0); }}
+                className="px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="all">全部熟练度</option>
+                <option value="new">新单词</option>
+                <option value="learning">学习中</option>
+                <option value="familiar">熟悉</option>
+                <option value="mastered">已掌握</option>
+              </select>
+
+              <select
+                value={tagFilter}
+                onChange={(e) => { setTagFilter(e.target.value); setPage(0); }}
+                className="px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="all">全部标记</option>
+                <option value="starred">星标词</option>
+                <option value="recentWrong">近期错词</option>
+              </select>
+
+              <select
+                value={reviewTimeFilter}
+                onChange={(e) => { setReviewTimeFilter(e.target.value); setPage(0); }}
+                className="px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="all">全部复习时间</option>
+                <option value="today">今天需复习</option>
+                <option value="overdue">已逾期</option>
+                <option value="week">7天内复习</option>
+              </select>
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -371,161 +429,255 @@ export const StatsPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {currentDeck.words.slice(0, 20).map(word => {
-                    const progress = wordProgress[word.id];
-                    const isExpanded = expandedWordId === word.id;
-                    const proficiencyColors = {
-                      new: 'bg-gray-100 text-gray-600',
-                      learning: 'bg-blue-100 text-blue-600',
-                      familiar: 'bg-green-100 text-green-600',
-                      mastered: 'bg-purple-100 text-purple-600',
-                    };
-                    const proficiencyLabels = {
-                      new: '新单词',
-                      learning: '学习中',
-                      familiar: '熟悉',
-                      mastered: '已掌握',
-                    };
-                    const prof = progress?.proficiency || 'new';
+                  {currentDeck.words
+                    .filter(word => {
+                      const progress = wordProgress[word.id];
+                      const prof = progress?.proficiency || 'new';
 
-                    return (
-                      <React.Fragment key={word.id}>
-                        <tr className={`border-b border-gray-100 hover:bg-gray-50 cursor-pointer ${isExpanded ? 'bg-gray-50' : ''}`}
-                            onClick={() => setExpandedWordId(isExpanded ? null : word.id)}>
-                          <td className="py-3 px-3 text-gray-400">
-                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                          </td>
-                          <td className="py-3 px-3">
-                            <span className="font-medium text-gray-800">{word.word}</span>
-                            <span className="text-gray-500 text-sm ml-2">{word.phonetic}</span>
-                          </td>
-                          <td className="py-3 px-3">
-                            <div className="flex gap-1">
-                              {progress?.isStarred && (
-                                <span className="inline-block px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 text-xs">
-                                  ⭐ 星标
-                                </span>
-                              )}
-                              {progress?.recentWrong && (
-                                <span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs">
-                                  近期错词
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="py-3 px-3">
-                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${proficiencyColors[prof]}`}>
-                              {proficiencyLabels[prof]}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 text-gray-600">{progress?.repetitions || 0}</td>
-                          <td className="py-3 px-3 text-gray-600">{progress?.nextReviewDate || '-'}</td>
-                          <td className="py-3 px-3 text-gray-600">{progress?.easeFactor.toFixed(2) || '2.50'}</td>
-                          <td className="py-3 px-3 text-right">
-                            <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                              {!progress?.isStarred ? (
-                                <button
-                                  onClick={() => {
-                                    addWordToIntensive(word.id);
-                                  }}
-                                  className="p-1.5 text-orange-500 hover:bg-orange-50 rounded-lg transition-colors"
-                                  title="加入重点强化"
-                                >
-                                  <Plus className="w-4 h-4" />
-                                  <Zap className="w-4 h-4" />
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => toggleWordStarred(word.id)}
-                                  className="p-1.5 text-yellow-500 hover:bg-yellow-50 rounded-lg transition-colors"
-                                  title="取消星标"
-                                >
-                                  <Star className="w-4 h-4 fill-yellow-400" />
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
+                      if (searchQuery.trim()) {
+                        const q = searchQuery.toLowerCase();
+                        if (!word.word.toLowerCase().includes(q) && !word.definition.toLowerCase().includes(q)) {
+                          return false;
+                        }
+                      }
 
-                        {isExpanded && progress && (
-                          <tr className="bg-gray-50 border-b border-gray-100">
-                            <td colSpan={8} className="py-4 px-8">
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div>
-                                  <h4 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                                    <BookOpen className="w-4 h-4" />
-                                    单词信息
-                                  </h4>
-                                  <div className="space-y-2 text-sm">
-                                    <div className="flex gap-2">
-                                      <span className="text-gray-500 w-16 shrink-0">释义</span>
-                                      <span className="text-gray-700">{word.definition}</span>
-                                    </div>
-                                    {word.example && (
-                                      <div className="flex gap-2">
-                                        <span className="text-gray-500 w-16 shrink-0">例句</span>
-                                        <div className="text-gray-700">
-                                          <p>{word.example}</p>
-                                          {word.exampleTranslation && (
-                                            <p className="text-gray-500 text-xs mt-1">{word.exampleTranslation}</p>
-                                          )}
-                                        </div>
-                                      </div>
-                                    )}
-                                    {progress.notes && (
-                                      <div className="flex gap-2">
-                                        <span className="text-gray-500 w-16 shrink-0">笔记</span>
-                                        <span className="text-gray-700">{progress.notes}</span>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
+                      if (proficiencyFilter !== 'all' && prof !== proficiencyFilter) return false;
 
-                                <div>
-                                  <h4 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                                    <Clock className="w-4 h-4" />
-                                    最近复习记录
-                                  </h4>
-                                  {progress.reviewHistory && progress.reviewHistory.length > 0 ? (
-                                    <div className="space-y-2 max-h-36 overflow-y-auto">
-                                      {[...progress.reviewHistory].reverse().slice(0, 10).map((record, idx) => (
-                                        <div key={idx} className="flex items-center gap-2 text-sm bg-white rounded-lg p-2 border border-gray-100">
-                                          <span className="text-lg">
-                                            {record.quality === 0 ? '😵' : record.quality === 3 ? '🤔' : '🎉'}
-                                          </span>
-                                          <div className="flex-1">
-                                            <span className="text-gray-600">
-                                              {record.quality === 0 ? '忘记了' : record.quality === 3 ? '有点模糊' : '完全记住'}
-                                            </span>
-                                            {record.mode === 'intensive' && (
-                                              <span className="ml-2 px-1.5 py-0.5 rounded bg-orange-100 text-orange-600 text-xs">
-                                                强化
-                                              </span>
-                                            )}
-                                          </div>
-                                          <span className="text-gray-400 text-xs">{record.date}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <p className="text-sm text-gray-400">暂无复习记录</p>
-                                  )}
-                                </div>
+                      if (tagFilter === 'starred' && !progress?.isStarred) return false;
+                      if (tagFilter === 'recentWrong' && !progress?.recentWrong) return false;
+
+                      if (reviewTimeFilter !== 'all' && progress) {
+                        const nextDate = progress.nextReviewDate;
+                        const todayStr = formatDate(new Date());
+                        if (reviewTimeFilter === 'today' && nextDate !== todayStr) return false;
+                        if (reviewTimeFilter === 'overdue' && nextDate > todayStr) return false;
+                        if (reviewTimeFilter === 'week') {
+                          const weekLater = formatDate(addDays(new Date(), 7));
+                          if (nextDate > weekLater || nextDate < todayStr) return false;
+                        }
+                      }
+                      if (reviewTimeFilter !== 'all' && !progress) return false;
+
+                      return true;
+                    })
+                    .slice(page * pageSize, (page + 1) * pageSize)
+                    .map(word => {
+                      const progress = wordProgress[word.id];
+                      const isExpanded = expandedWordId === word.id;
+                      const proficiencyColors = {
+                        new: 'bg-gray-100 text-gray-600',
+                        learning: 'bg-blue-100 text-blue-600',
+                        familiar: 'bg-green-100 text-green-600',
+                        mastered: 'bg-purple-100 text-purple-600',
+                      };
+                      const proficiencyLabels = {
+                        new: '新单词',
+                        learning: '学习中',
+                        familiar: '熟悉',
+                        mastered: '已掌握',
+                      };
+                      const prof = progress?.proficiency || 'new';
+
+                      return (
+                        <React.Fragment key={word.id}>
+                          <tr className={`border-b border-gray-100 hover:bg-gray-50 cursor-pointer ${isExpanded ? 'bg-gray-50' : ''}`}
+                              onClick={() => setExpandedWordId(isExpanded ? null : word.id)}>
+                            <td className="py-3 px-3 text-gray-400">
+                              {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className="font-medium text-gray-800">{word.word}</span>
+                              <span className="text-gray-500 text-sm ml-2">{word.phonetic}</span>
+                            </td>
+                            <td className="py-3 px-3">
+                              <div className="flex gap-1">
+                                {progress?.isStarred && (
+                                  <span className="inline-block px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 text-xs">
+                                    ⭐ 星标
+                                  </span>
+                                )}
+                                {progress?.recentWrong && (
+                                  <span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs">
+                                    近期错词
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${proficiencyColors[prof]}`}>
+                                {proficiencyLabels[prof]}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-gray-600">{progress?.repetitions || 0}</td>
+                            <td className="py-3 px-3 text-gray-600">{progress?.nextReviewDate || '-'}</td>
+                            <td className="py-3 px-3 text-gray-600">{progress?.easeFactor.toFixed(2) || '2.50'}</td>
+                            <td className="py-3 px-3 text-right">
+                              <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                                {!progress?.isStarred ? (
+                                  <button
+                                    onClick={() => {
+                                      addWordToIntensive(word.id);
+                                    }}
+                                    className="p-1.5 text-orange-500 hover:bg-orange-50 rounded-lg transition-colors flex items-center gap-0.5"
+                                    title="加入重点强化"
+                                  >
+                                    <Plus className="w-4 h-4" />
+                                    <Zap className="w-3.5 h-3.5" />
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => toggleWordStarred(word.id)}
+                                    className="p-1.5 text-yellow-500 hover:bg-yellow-50 rounded-lg transition-colors"
+                                    title="取消星标"
+                                  >
+                                    <Star className="w-4 h-4 fill-yellow-400" />
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
+
+                          {isExpanded && progress && (
+                            <tr className="bg-gray-50 border-b border-gray-100">
+                              <td colSpan={8} className="py-4 px-8">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                  <div>
+                                    <h4 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                                      <BookOpen className="w-4 h-4" />
+                                      单词信息
+                                    </h4>
+                                    <div className="space-y-2 text-sm">
+                                      <div className="flex gap-2">
+                                        <span className="text-gray-500 w-16 shrink-0">释义</span>
+                                        <span className="text-gray-700">{word.definition}</span>
+                                      </div>
+                                      {word.example && (
+                                        <div className="flex gap-2">
+                                          <span className="text-gray-500 w-16 shrink-0">例句</span>
+                                          <div className="text-gray-700">
+                                            <p>{word.example}</p>
+                                            {word.exampleTranslation && (
+                                              <p className="text-gray-500 text-xs mt-1">{word.exampleTranslation}</p>
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
+                                      {progress.notes && (
+                                        <div className="flex gap-2">
+                                          <span className="text-gray-500 w-16 shrink-0">笔记</span>
+                                          <span className="text-gray-700">{progress.notes}</span>
+                                        </div>
+                                      )}
+                                      <div className="flex gap-2">
+                                        <span className="text-gray-500 w-16 shrink-0">下次复习</span>
+                                        <span className="text-gray-700">{progress.nextReviewDate}</span>
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <span className="text-gray-500 w-16 shrink-0">来源</span>
+                                        <span className="text-gray-700">
+                                          {progress.reviewHistory.some(r => r.mode === 'intensive') ? '含重点强化' : '仅今日任务'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div>
+                                    <h4 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                                      <Clock className="w-4 h-4" />
+                                      最近复习记录
+                                    </h4>
+                                    {progress.reviewHistory && progress.reviewHistory.length > 0 ? (
+                                      <div className="space-y-2 max-h-36 overflow-y-auto">
+                                        {[...progress.reviewHistory].reverse().slice(0, 10).map((record, idx) => (
+                                          <div key={idx} className="flex items-center gap-2 text-sm bg-white rounded-lg p-2 border border-gray-100">
+                                            <span className="text-lg">
+                                              {record.quality === 0 ? '😵' : record.quality === 3 ? '🤔' : '🎉'}
+                                            </span>
+                                            <div className="flex-1">
+                                              <span className="text-gray-600">
+                                                {record.quality === 0 ? '忘记了' : record.quality === 3 ? '有点模糊' : '完全记住'}
+                                              </span>
+                                              {record.mode === 'intensive' && (
+                                                <span className="ml-2 px-1.5 py-0.5 rounded bg-orange-100 text-orange-600 text-xs">
+                                                  强化
+                                                </span>
+                                              )}
+                                            </div>
+                                            <span className="text-gray-400 text-xs">{record.date}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <p className="text-sm text-gray-400">暂无复习记录</p>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>
-            {currentDeck.words.length > 20 && (
-              <p className="text-center text-gray-500 text-sm mt-4">
-                显示前20个单词，共 {currentDeck.words.length} 个
-              </p>
-            )}
+
+            {(() => {
+              const filteredTotal = currentDeck.words.filter(word => {
+                const progress = wordProgress[word.id];
+                const prof = progress?.proficiency || 'new';
+                if (searchQuery.trim()) {
+                  const q = searchQuery.toLowerCase();
+                  if (!word.word.toLowerCase().includes(q) && !word.definition.toLowerCase().includes(q)) return false;
+                }
+                if (proficiencyFilter !== 'all' && prof !== proficiencyFilter) return false;
+                if (tagFilter === 'starred' && !progress?.isStarred) return false;
+                if (tagFilter === 'recentWrong' && !progress?.recentWrong) return false;
+                if (reviewTimeFilter !== 'all' && progress) {
+                  const nextDate = progress.nextReviewDate;
+                  const todayStr = formatDate(new Date());
+                  if (reviewTimeFilter === 'today' && nextDate !== todayStr) return false;
+                  if (reviewTimeFilter === 'overdue' && nextDate > todayStr) return false;
+                  if (reviewTimeFilter === 'week') {
+                    const weekLater = formatDate(addDays(new Date(), 7));
+                    if (nextDate > weekLater || nextDate < todayStr) return false;
+                  }
+                }
+                if (reviewTimeFilter !== 'all' && !progress) return false;
+                return true;
+              }).length;
+
+              const totalPages = Math.ceil(filteredTotal / pageSize);
+
+              return (
+                <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
+                  <p className="text-sm text-gray-500">
+                    共 {filteredTotal} 个单词
+                  </p>
+                  {totalPages > 1 && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setPage(p => Math.max(0, p - 1))}
+                        disabled={page === 0}
+                        className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <span className="text-sm text-gray-600">
+                        {page + 1} / {totalPages}
+                      </span>
+                      <button
+                        onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+                        disabled={page >= totalPages - 1}
+                        className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronLeft className="w-4 h-4 rotate-180" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>

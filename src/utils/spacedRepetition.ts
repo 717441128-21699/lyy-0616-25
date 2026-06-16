@@ -228,6 +228,51 @@ export const getTodayQueue = (plan: TodayPlan): string[] => {
   return queue;
 };
 
+export const predictFutureSchedule = (
+  allProgress: Record<string, WordProgress>,
+  words: { id: string }[],
+  days: number = 14
+): Record<string, { reviewCount: number; newCount: number; wordIds: string[] }> => {
+  const today = new Date();
+  const schedule: Record<string, { reviewCount: number; newCount: number; wordIds: string[] }> = {};
+
+  for (let i = 0; i <= days; i++) {
+    const date = formatDate(addDays(today, i));
+    schedule[date] = { reviewCount: 0, newCount: 0, wordIds: [] };
+  }
+
+  let newWordIdx = 0;
+  const learnedIds = new Set<string>();
+
+  for (const w of words) {
+    const p = allProgress[w.id];
+    if (p && p.repetitions > 0) {
+      learnedIds.add(w.id);
+      const nextDate = p.nextReviewDate;
+      if (nextDate && schedule[nextDate]) {
+        schedule[nextDate].reviewCount++;
+        schedule[nextDate].wordIds.push(w.id);
+      }
+    }
+  }
+
+  const newWords = words.filter(w => !learnedIds.has(w.id));
+  const dailyNew = 10;
+  for (let i = 0; i < Math.min(days + 1, Math.ceil(newWords.length / dailyNew)); i++) {
+    const date = formatDate(addDays(today, i));
+    if (schedule[date]) {
+      const count = Math.min(dailyNew, newWords.length - i * dailyNew);
+      schedule[date].newCount = Math.max(schedule[date].newCount, count);
+      for (let j = 0; j < count && newWordIdx < newWords.length; j++) {
+        schedule[date].wordIds.push(newWords[newWordIdx].id);
+        newWordIdx++;
+      }
+    }
+  }
+
+  return schedule;
+};
+
 export const predictMemoryCurve = (progress: WordProgress, days: number = 30): number[] => {
   const curve: number[] = [];
   let currentProgress = { ...progress };

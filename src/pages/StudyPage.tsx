@@ -24,6 +24,7 @@ export const StudyPage: React.FC = () => {
     getWordById,
     getWordProgress,
     reviewWord,
+    addDailyReviewLog,
     adjustTodayPlanLimit,
     setCurrentMode,
     regenerateTodayPlan,
@@ -68,10 +69,11 @@ export const StudyPage: React.FC = () => {
     if (normalQueueSnapshot.length === 0 && rawNormalQueue.length > 0) {
       setNormalQueueSnapshot(rawNormalQueue);
     }
-    if (intensiveQueueSnapshot.length === 0 && rawIntensiveQueue.length > 0) {
-      setIntensiveQueueSnapshot(rawIntensiveQueue);
-    }
-  }, [rawNormalQueue, rawIntensiveQueue, normalQueueSnapshot.length, intensiveQueueSnapshot.length]);
+  }, [rawNormalQueue, normalQueueSnapshot.length]);
+
+  useEffect(() => {
+    setIntensiveQueueSnapshot(rawIntensiveQueue);
+  }, [rawIntensiveQueue]);
 
   const getCurrentQueueState = () => {
     switch (practiceMode) {
@@ -111,6 +113,13 @@ export const StudyPage: React.FC = () => {
 
     if (practiceMode !== 'retry') {
       reviewWord(currentWordId, result, responseTime, effectiveMode);
+    } else {
+      addDailyReviewLog({
+        wordId: currentWordId,
+        result,
+        mode: 'retry',
+        responseTime,
+      });
     }
 
     setFeedback({ show: true, result });
@@ -150,6 +159,7 @@ export const StudyPage: React.FC = () => {
     currentMode,
     effectiveMode,
     reviewWord,
+    addDailyReviewLog,
   ]);
 
   const handleLimitAdjust = (type: 'new' | 'review' | 'intensive', delta: number) => {
